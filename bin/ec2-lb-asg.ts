@@ -2,23 +2,45 @@
 import * as cdk from 'aws-cdk-lib';
 import { Ec2LbAsgStack } from '../lib/ec2-lb-asg-stack';
 import * as dotenv from 'dotenv';
-
+import {aws_cloudfront as cloudfront, aws_cloudfront_origins as origins, Stack} from 'aws-cdk-lib';
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import {environments} from "../lib/config/enviornments";
+export const app = new cdk.App();
 // Load environment variables from .env file
 dotenv.config();
 
-const app = new cdk.App();
-new Ec2LbAsgStack(app, 'stg', {
-  /* If you don't specify 'env', this stack will be environment-agnostic.
-   * Account/Region-dependent features and context lookups will not work,
-   * but a single synthesized template can be deployed anywhere. */
 
-  /* Uncomment the next line to specialize this stack for the AWS Account
-   * and Region that are implied by the current CLI configuration. */
-  // env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
 
-  /* Uncomment the next line if you know exactly what Account and Region you
-   * want to deploy the stack to. */
-  // env: { account: '123456789012', region: 'us-east-1' },
+environments.forEach(env => {
 
-  /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
+    try{
+        new Ec2LbAsgStack(app, env.stackId, {
+            /* If you don't specify 'env', this stack will be environment-agnostic.
+             * Account/Region-dependent features and context lookups will not work,
+             * but a single synthesized template can be deployed anywhere. */
+
+            env: {
+                account: process.env.CDK_DEFAULT_ACCOUNT,
+                region: 'us-west-2',
+            },
+            crossRegionReferences: true,
+            /* Uncomment the next line to specialize this stack for the AWS Account
+             * and Region that are implied by the current CLI configuration. */
+            // env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+
+            /* Uncomment the next line if you know exactly what Account and Region you
+             * want to deploy the stack to. */
+            // env: { account: '123456789012', region: 'us-east-1' },
+
+            /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
+        });
+    }catch (e){
+        console.log(e);
+    }
+
 });
+
+
+
+
+
