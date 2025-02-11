@@ -5,13 +5,13 @@ import {AwsRegion} from "../enums/regions";
 
 export const environments: EnviornmentConfig[] = [
     {
-        stackId: 'test',
+        stackId: 'jay',
         hostedZoneDomain: 'zinzuu.com',
-        apiDomain: 'test-api',
-        merchantDomain: 'test-merchant',
-        mainDomain: 'test',
-        cdnDomain: 'test-cdn',
-        adminDomain: 'test-admin',
+        apiDomain: 'jay-api',
+        merchantDomain: 'jay-merchant',
+        mainDomain: 'jay',
+        cdnDomain: 'jay-cdn',
+        adminDomain: 'jay-admin',
         ec2InstanceType: cdk.aws_ec2.InstanceClass.T2,
         ec2InstanceSize: cdk.aws_ec2.InstanceSize.MEDIUM,
         keyPairName: 'zinzuu-prod',
@@ -21,6 +21,7 @@ export const environments: EnviornmentConfig[] = [
         databasePubliclyAccessible: false,
         databaseName: 'codeigniter',
         amiRegion: AwsRegion.USWestOregon,
-        amiId: 'ami-00c257e12d6828491'
+        amiId: 'ami-00c257e12d6828491',
+        branchName: "main"
     }
 ]

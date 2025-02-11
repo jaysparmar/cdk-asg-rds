@@ -3,7 +3,7 @@ import {
     aws_cloudfront_origins as origins,
     aws_iam as iam,
     aws_lambda as lambda,
-    aws_logs as logs,
+    aws_logs as logs, aws_route53,
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
     CfnOutput,
@@ -15,55 +15,22 @@ import {
 } from 'aws-cdk-lib';
 import {CacheHeaderBehavior, CfnDistribution} from "aws-cdk-lib/aws-cloudfront";
 import {Construct} from 'constructs';
-import {getOriginShieldRegion} from './origin-shield';
-import {config} from "./config";
-
-
-// Implement the toPascalCase method on the Array prototype
-let toPascalCase = function (words: string[]): string {
-    /**
-     * Converts an array of words to PascalCase.
-     *
-     * @returns A single string converted to PascalCase.
-     */
-    if (words.length === 0) {
-        return "";
-    }
-
-    return words.map((word: string) =>
-        word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-    ).join("");
-};
+import {
+    ASSET_STACK_STRING,
+    CLOUDFRONT_ORIGIN_SHIELD_REGION,
+    LAMBDA_MEMORY,
+    LAMBDA_TIMEOUT,
+    MAX_IMAGE_SIZE,
+    S3_TRANSFORMED_IMAGE_CACHE_TTL,
+    S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION, STORE_TRANSFORMED_IMAGES
+} from "./config/constants";
+import {EnviornmentConfig} from "./models/enviornmentConfig";
+import {getDomain, getEnviornmentConfig} from "./helper/functions";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import {app} from "../bin/ec2-lb-asg";
 
 
 
-
-
-const generateResourceString = ( resource: string, includeStackId:boolean = true): string =>  `${config.env}-${resource}`+(includeStackId ?`-${config.stackId}`:"");
-
-
-var STORE_TRANSFORMED_IMAGES = 'true';
-
-var S3_IMAGE_BUCKET_NAME: string;
-
-var CLOUDFRONT_ORIGIN_SHIELD_REGION = getOriginShieldRegion(process.env.AWS_REGION || process.env.CDK_DEFAULT_REGION || 'us-east-1');
-
-var CLOUDFRONT_CORS_ENABLED = 'true';
-
-var S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION = '90';
-
-var S3_TRANSFORMED_IMAGE_CACHE_TTL = 'max-age=31622400';
-
-var MAX_IMAGE_SIZE = '4700000';
-
-// Lambda Parameters
-var LAMBDA_MEMORY = '1500';
-
-var LAMBDA_TIMEOUT = '60';
-
-var CREATE_NEW_BUCKET:  boolean = false;
-
-var DEPLOY_SAMPLE_WEBSITE = 'false';
 
 type ImageDeliveryCacheBehaviorConfig = {
     origin: any;
@@ -82,109 +49,53 @@ type LambdaEnv = {
 }
 
 
-
 export class ImageOptimizationStack extends Stack {
     constructor(scope: Construct, id: string, props?: StackProps) {
         super(scope, id, props);
 
-        let appendStackEnv = toPascalCase([config.env, config.stackId])
+        const config: EnviornmentConfig | undefined = getEnviornmentConfig(id.split(ASSET_STACK_STRING)[0]);
 
 
 
-
-        // Change stack parameters based on provided context
-        STORE_TRANSFORMED_IMAGES = this.node.tryGetContext('STORE_TRANSFORMED_IMAGES') || STORE_TRANSFORMED_IMAGES;
-        S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION = this.node.tryGetContext('S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION') || S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION;
-        S3_TRANSFORMED_IMAGE_CACHE_TTL = this.node.tryGetContext('S3_TRANSFORMED_IMAGE_CACHE_TTL') || S3_TRANSFORMED_IMAGE_CACHE_TTL;
-        S3_IMAGE_BUCKET_NAME = this.node.tryGetContext('S3_IMAGE_BUCKET_NAME') || S3_IMAGE_BUCKET_NAME;
-        CLOUDFRONT_ORIGIN_SHIELD_REGION = this.node.tryGetContext('CLOUDFRONT_ORIGIN_SHIELD_REGION') || CLOUDFRONT_ORIGIN_SHIELD_REGION;
-        CLOUDFRONT_CORS_ENABLED = this.node.tryGetContext('CLOUDFRONT_CORS_ENABLED') || CLOUDFRONT_CORS_ENABLED;
-        LAMBDA_MEMORY = this.node.tryGetContext('LAMBDA_MEMORY') || LAMBDA_MEMORY;
-        LAMBDA_TIMEOUT = this.node.tryGetContext('LAMBDA_TIMEOUT') || LAMBDA_TIMEOUT;
-        MAX_IMAGE_SIZE = this.node.tryGetContext('MAX_IMAGE_SIZE') || MAX_IMAGE_SIZE;
-        DEPLOY_SAMPLE_WEBSITE = this.node.tryGetContext('DEPLOY_SAMPLE_WEBSITE') || DEPLOY_SAMPLE_WEBSITE;
-
-
-        // deploy a sample website for testing if required
-        if (DEPLOY_SAMPLE_WEBSITE === 'true') {
-            var sampleWebsiteBucket = new s3.Bucket(this, 's3-sample-website-bucket', {
-                removalPolicy: RemovalPolicy.DESTROY,
-                blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-                encryption: s3.BucketEncryption.S3_MANAGED,
-                enforceSSL: true,
-                autoDeleteObjects: true,
-            });
-
-            var sampleWebsiteDelivery = new cloudfront.Distribution(this, 'websiteDeliveryDistribution', {
-                comment: 'image optimization - sample website',
-                defaultRootObject: 'index.html',
-                defaultBehavior: {
-                    origin: new origins.S3Origin(sampleWebsiteBucket),
-                    viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-                }
-            });
-
-            new CfnOutput(this, 'SampleWebsiteDomain', {
-                description: 'Sample website domain',
-                value: sampleWebsiteDelivery.distributionDomainName
-            });
-            new CfnOutput(this, 'SampleWebsiteS3Bucket', {
-                description: 'S3 bucket use by the sample website',
-                value: sampleWebsiteBucket.bucketName
-            });
+        if (config === undefined) {
+            throw new Error('Invalid stackId');
         }
 
 
-        // For the bucket having original images, either use an external one, or create one with some samples photos.
-        var originalImageBucket;
-        var transformedImageBucket;
 
 
+        const originalImageBucket = new s3.Bucket(this, id + "original-bucket", {
+            removalPolicy: RemovalPolicy.DESTROY,
+            blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
 
-        CREATE_NEW_BUCKET = config.createNewBucket;
+            encryption: s3.BucketEncryption.S3_MANAGED,
+            enforceSSL: true,
+            autoDeleteObjects: true,
+        });
+        new s3deploy.BucketDeployment(this, id + '-DeployWebsite', {
+            sources: [s3deploy.Source.asset('./image-sample')],
+            destinationBucket: originalImageBucket,
+            destinationKeyPrefix: '/',
+        });
+        new CfnOutput(this, id + '-OriginalAssetsS3Bucket', {
+            description: 'S3 bucket where original images are stored',
+            value: originalImageBucket.bucketName
+        });
 
-        if (!CREATE_NEW_BUCKET) {
-            originalImageBucket = s3.Bucket.fromBucketName(this, generateResourceString('imported-original-image-bucket'), S3_IMAGE_BUCKET_NAME);
-            new CfnOutput(this, generateResourceString('OriginalImagesS3Bucket'), {
-                description: 'S3 bucket where original images are stored',
-                value: originalImageBucket.bucketName
-            });
-        } else {
 
-            originalImageBucket = new s3.Bucket(this, generateResourceString(config.newBucketName), {
-                removalPolicy: RemovalPolicy.DESTROY,
-                blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+        const transformedImageBucket = new s3.Bucket(this, id + "transformed-bucket", {
+            removalPolicy: RemovalPolicy.DESTROY,
+            autoDeleteObjects: true,
+            lifecycleRules: [
+                {
+                    expiration: Duration.days(parseInt(S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION)),
+                },
+            ],
+        });
 
-                encryption: s3.BucketEncryption.S3_MANAGED,
-                enforceSSL: true,
-                autoDeleteObjects: true,
-            });
-            new s3deploy.BucketDeployment(this, appendStackEnv + ('DeployWebsite'), {
-                sources: [s3deploy.Source.asset('./image-sample')],
-                destinationBucket: originalImageBucket,
-                destinationKeyPrefix: '/',
-            });
-            new CfnOutput(this, appendStackEnv +('OriginalAssetsS3Bucket'), {
-                description: 'S3 bucket where original images are stored',
-                value: originalImageBucket.bucketName
-            });
-        }
-
-        // create bucket for transformed images if enabled in the architecture
-        if (STORE_TRANSFORMED_IMAGES === 'true') {
-            transformedImageBucket = new s3.Bucket(this, generateResourceString(`cache-${config.newBucketName}`), {
-                removalPolicy: RemovalPolicy.DESTROY,
-                autoDeleteObjects: true,
-                lifecycleRules: [
-                    {
-                        expiration: Duration.days(parseInt(S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION)),
-                    },
-                ],
-            });
-        }
 
         // prepare env variable for Lambda
-        var lambdaEnv: LambdaEnv = {
+        const lambdaEnv: LambdaEnv = {
             originalImageBucketName: originalImageBucket.bucketName,
             transformedImageCacheTTL: S3_TRANSFORMED_IMAGE_CACHE_TTL,
 
@@ -199,10 +110,10 @@ export class ImageOptimizationStack extends Stack {
         });
 
         // statements of the IAM policy to attach to Lambda
-        var iamPolicyStatements = [s3ReadOriginalImagesPolicy];
+        const iamPolicyStatements = [s3ReadOriginalImagesPolicy];
 
         // Create Lambda for image processing
-        var lambdaProps = {
+        let lambdaProps = {
             runtime: lambda.Runtime.NODEJS_20_X,
             handler: 'index.handler',
             code: lambda.Code.fromAsset('functions/image-processing'),
@@ -213,7 +124,7 @@ export class ImageOptimizationStack extends Stack {
 
         };
 
-        var imageProcessing = new lambda.Function(this, generateResourceString('image-optimization'), lambdaProps);
+        const imageProcessing = new lambda.Function(this, id + ('image-optimization'), lambdaProps);
 
 
         // Enable Lambda URL
@@ -223,8 +134,8 @@ export class ImageOptimizationStack extends Stack {
         const imageProcessingDomainName = Fn.parseDomainName(imageProcessingURL.url);
 
         // Create a CloudFront origin: S3 with fallback to Lambda when image needs to be transformed, otherwise with Lambda as sole origin
-        var imageOrigin;
-        var defaultOrigin;
+        let imageOrigin;
+        let defaultOrigin;
 
         if (transformedImageBucket) {
             imageOrigin = new origins.OriginGroup({
@@ -241,7 +152,7 @@ export class ImageOptimizationStack extends Stack {
             })
 
             // write policy for Lambda on the s3 bucket for transformed images
-            var s3WriteTransformedImagesPolicy = new iam.PolicyStatement({
+            const s3WriteTransformedImagesPolicy = new iam.PolicyStatement({
                 actions: ['s3:PutObject'],
                 resources: ['arn:aws:s3:::' + transformedImageBucket.bucketName + '/*'],
             });
@@ -254,22 +165,22 @@ export class ImageOptimizationStack extends Stack {
 
         // attach iam policy to the role assumed by Lambda
         imageProcessing.role?.attachInlinePolicy(
-            new iam.Policy(this, generateResourceString('read-write-bucket-policy'), {
+            new iam.Policy(this, id + ('-read-write-bucket-policy'), {
                 statements: iamPolicyStatements,
             }),
         );
 
         // Create a CloudFront Function for url rewrites
-        const urlRewriteFunction = new cloudfront.Function(this, generateResourceString('urlRewrite'), {
+        const urlRewriteFunction = new cloudfront.Function(this, id + ('-urlRewrite'), {
             code: cloudfront.FunctionCode.fromFile({filePath: 'functions/url-rewrite/index.js',}),
-            functionName: `urlRewriteFunction${appendStackEnv}`,
+            functionName: `${id}-urlRewriteFunction`,
         });
 
-        var imageDeliveryCacheBehaviorConfig: ImageDeliveryCacheBehaviorConfig = {
+        let imageDeliveryCacheBehaviorConfig: ImageDeliveryCacheBehaviorConfig = {
             origin: imageOrigin,
             viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             compress: false,
-            cachePolicy: new cloudfront.CachePolicy(this, `ImageCachePolicy${appendStackEnv}`, {
+            cachePolicy: new cloudfront.CachePolicy(this, `${id}-ImageCachePolicy`, {
                 defaultTtl: Duration.hours(24),
                 maxTtl: Duration.days(365),
                 minTtl: Duration.seconds(0),
@@ -281,21 +192,18 @@ export class ImageOptimizationStack extends Stack {
             }],
 
         }
-        var defaultCacheBehaviorConfig: ImageDeliveryCacheBehaviorConfig = {
+        let defaultCacheBehaviorConfig: ImageDeliveryCacheBehaviorConfig = {
             origin: defaultOrigin,
             viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             compress: false,
-            cachePolicy:cloudfront.CachePolicy.CACHING_OPTIMIZED,
+            cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
             functionAssociations: undefined,
-
         }
 
 
-
-        if (CLOUDFRONT_CORS_ENABLED === 'true') {
             // Creating a custom response headers policy. CORS allowed for all origins.
-            imageDeliveryCacheBehaviorConfig.responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, `ResponseHeadersPolicy${appendStackEnv}`, {
-                responseHeadersPolicyName: `ImageResponsePolicy${appendStackEnv}`,
+            imageDeliveryCacheBehaviorConfig.responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, `ResponseHeadersPolicy${id}`, {
+                responseHeadersPolicyName: `ImageResponsePolicy${id}`,
                 corsBehavior: {
                     accessControlAllowCredentials: false,
                     accessControlAllowHeaders: ['*'],
@@ -313,27 +221,41 @@ export class ImageOptimizationStack extends Stack {
                 }
             });
 
+        const stack1 = new Stack(app, id + '-ssl-dns', {
+            env: {
+                account: process.env.CDK_DEFAULT_ACCOUNT, // Replace with your AWS account ID if not using default
+                region: 'us-east-1', // Replace with your desired region
+            },
+            crossRegionReferences: true,
+        });
 
-        }
+        const myHostedZone = aws_route53.HostedZone.fromLookup(stack1, 'HostedZone', {
+            domainName: config.hostedZoneDomain, // Replace with your domain name
+        });
+        const cdnCert = new acm.Certificate(stack1, 'cdn-Cert', {
+            domainName: getDomain(config, config.cdnDomain),
+            validation: acm.CertificateValidation.fromDns(myHostedZone),
+        });
 
 
-        const imageDelivery = new cloudfront.Distribution(this, generateResourceString('imageDeliveryDistribution'), {
-            comment: `${config.env} Asset CDN ${config.stackId}`,
+
+        const imageDelivery = new cloudfront.Distribution(this, id + ('-imageDeliveryDistribution'), {
+            comment: `${id} Asset CDN`,
             defaultBehavior: defaultCacheBehaviorConfig,
             additionalBehaviors: {
                 '/*.png': imageDeliveryCacheBehaviorConfig,
                 '/*.jpg': imageDeliveryCacheBehaviorConfig,
                 '/*.jpeg': imageDeliveryCacheBehaviorConfig,
-            }
+            },
+            domainNames: [getDomain(config, config.cdnDomain)], // Replace with your domain name
+            certificate: cdnCert
         });
 
 
-
-
         // ADD OAC between CloudFront and LambdaURL
-        const oac = new cloudfront.CfnOriginAccessControl(this, generateResourceString("OAC"), {
+        const oac = new cloudfront.CfnOriginAccessControl(this, id + ("OAC"), {
             originAccessControlConfig: {
-                name: `oac${appendStackEnv}`,
+                name: `oac${id}`,
                 originAccessControlOriginType: "lambda",
                 signingBehavior: "always",
                 signingProtocol: "sigv4",
@@ -352,8 +274,15 @@ export class ImageOptimizationStack extends Stack {
         })
 
 
+        new aws_route53.CnameRecord(this, 'CnameRecord-admin', {
+            zone: myHostedZone,
+            recordName: config.adminDomain,
+            domainName: imageDelivery.distributionDomainName,
+            deleteExisting: true,
+        });
+
         new CfnOutput(this, 'ImageDeliveryDomain', {
-            description: `${config.env} Asset CDN ${config.stackId}`,
+            description: `${id} Asset CDN `,
             value: imageDelivery.distributionDomainName
         });
     }

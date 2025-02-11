@@ -5,6 +5,8 @@ import * as dotenv from 'dotenv';
 import {aws_cloudfront as cloudfront, aws_cloudfront_origins as origins, Stack} from 'aws-cdk-lib';
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import {environments} from "../lib/config/enviornments";
+import {ImageOptimizationStack} from "../lib/image-optimization-stack";
+import {ASSET_STACK_STRING} from "../lib/config/constants";
 export const app = new cdk.App();
 // Load environment variables from .env file
 dotenv.config();
@@ -14,6 +16,17 @@ dotenv.config();
 environments.forEach(env => {
 
     try{
+
+        new ImageOptimizationStack(app, `${env.stackId}${ASSET_STACK_STRING}`, {
+            env: {
+                account: process.env.CDK_DEFAULT_ACCOUNT, // Replace with your AWS account ID if not using default
+                region: 'us-west-2', // Replace with your desired region
+            },
+            crossRegionReferences: true,
+        });
+
+
+
         new Ec2LbAsgStack(app, env.stackId, {
             /* If you don't specify 'env', this stack will be environment-agnostic.
              * Account/Region-dependent features and context lookups will not work,

@@ -19,6 +19,7 @@ export type EnviornmentConfig = {
     databasePubliclyAccessible: boolean,
     databaseName: string,
     amiRegion: AwsRegion,
-    amiId: "ami-00c257e12d6828491"
+    amiId: string,
+    branchName: string
 }
 
