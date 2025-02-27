@@ -2,8 +2,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Ec2LbAsgStack } from '../lib/ec2-lb-asg-stack';
 import * as dotenv from 'dotenv';
-import {aws_cloudfront as cloudfront, aws_cloudfront_origins as origins, Stack} from 'aws-cdk-lib';
-import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import {environments} from "../lib/config/enviornments";
 import {ImageOptimizationStack} from "../lib/image-optimization-stack";
 import {ASSET_STACK_STRING} from "../lib/config/constants";

@@ -274,12 +274,7 @@ export class ImageOptimizationStack extends Stack {
         })
 
 
-        new aws_route53.CnameRecord(this, 'CnameRecord-admin', {
-            zone: myHostedZone,
-            recordName: config.adminDomain,
-            domainName: imageDelivery.distributionDomainName,
-            deleteExisting: true,
-        });
+
 
         new CfnOutput(this, 'ImageDeliveryDomain', {
             description: `${id} Asset CDN `,
